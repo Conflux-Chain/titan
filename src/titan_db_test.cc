@@ -247,6 +247,7 @@ class TitanDBTest : public testing::Test {
   void DeleteFilesInRange(const Slice* begin, const Slice* end) {
     RangePtr range(begin, end);
     ASSERT_OK(db_->DeleteFilesInRanges(db_->DefaultColumnFamily(), &range, 1));
+    ASSERT_OK(db_->DeleteBlobFilesInRanges(db_->DefaultColumnFamily(), &range, 1));
   }
 
   std::string GenKey(uint64_t i) {
@@ -702,6 +703,10 @@ TEST_F(TitanDBTest, DeleteFilesInRange) {
   ASSERT_TRUE(db_->GetProperty("rocksdb.num-files-at-level6", &value));
   ASSERT_EQ(value, "3");
 
+  std::unique_ptr<Iterator> iter(db_->NewIterator(ReadOptions()));
+  iter->SeekToFirst();
+  ASSERT_TRUE(iter->Valid());
+
   std::string key40 = GenKey(40);
   std::string key80 = GenKey(80);
   Slice start = Slice(key40);
@@ -722,6 +727,18 @@ TEST_F(TitanDBTest, DeleteFilesInRange) {
   // These two files are marked obsolete directly by `DeleteBlobFilesInRanges`
   ASSERT_EQ(blob->NumObsoleteBlobFiles(), 2);
 
+  // The snapshot held by the iterator prevents the blob files from being
+  // purged.
+  ASSERT_OK(db_impl_->TEST_PurgeObsoleteFiles());
+  while (iter->Valid()) {
+    iter->Next();
+    ASSERT_OK(iter->status());
+  }
+  ASSERT_EQ(blob->NumBlobFiles(), 6);
+  ASSERT_EQ(blob->NumObsoleteBlobFiles(), 2);
+
+  // Once the snapshot is released, the blob files should be purged.
+  iter.reset(nullptr);
   ASSERT_OK(db_impl_->TEST_PurgeObsoleteFiles());
   ASSERT_EQ(blob->NumBlobFiles(), 4);
   ASSERT_EQ(blob->NumObsoleteBlobFiles(), 0);
